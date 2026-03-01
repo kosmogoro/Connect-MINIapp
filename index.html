@@ -393,6 +393,44 @@
 </nav>
 
 <script>
+// ═══ API НАСТРОЙКИ ═══
+const API_URL = 'connectbot-production-30bf.up.railway.app';  // ✅ Правильно!
+let useRealData = false;  // Начинаем с демо, потом переключим
+
+// ═══ ЗАГРУЗКА ПРОФИЛЕЙ ИЗ API ═══
+async function loadProfilesFromAPI() {
+    try {
+        const response = await fetch(`${API_URL}/api/profiles?user_id=${currentUserId}`);
+        const data = await response.json();
+        
+        if (data.profiles && data.profiles.length > 0) {
+            console.log(`📊 Загружено ${data.profiles.length} профилей из БД`);
+            // Преобразуем формат API в формат твоих демо-профилей
+            allProfiles = data.profiles.map(p => ({
+                id: p.id,
+                name: `${p.name}, ${p.age}`,
+                shortName: p.shortName || p.name,
+                age: p.age,
+                city: p.city + (p.dist ? ` · ${p.dist} км` : ''),
+                dist: p.dist || 0,
+                gender: p.gender,
+                desc: p.desc,
+                img: p.img.startsWith('AgAC') ? `https://api.telegram.org/file/bot${BOT_TOKEN}/${p.img}` : p.img,
+                tags: [],
+                likedMe: false,
+                tgId: p.tgId || p.id,
+                tgUsername: p.tgUsername,
+                from_db: true
+            }));
+            useRealData = true;
+            return true;
+        }
+    } catch (e) {
+        console.log('⚠️ API недоступен, используем демо:', e);
+    }
+    return false;
+}
+
 // ═══ TELEGRAM INIT ═══
 const tg = window.Telegram?.WebApp;
 if (tg) { tg.ready(); tg.expand(); tg.setHeaderColor('#0d0d0f'); tg.setBackgroundColor('#0d0d0f'); }
@@ -475,33 +513,74 @@ let activeFilters = { age:'any', gender:'any', dist:'any' };
 let selectedGender = 'Мужской';
 let myPhotoUrl = 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400&h=400&fit=crop';
 
+// ═══ ЗАГРУЗКА ПРОФИЛЕЙ ИЗ API ═══
+async function loadProfilesFromAPI() {
+    try {
+        const response = await fetch(`${API_URL}/api/profiles?user_id=${currentUserId}`);
+        const data = await response.json();
+        
+        if (data.profiles && data.profiles.length > 0) {
+            console.log(`📊 Загружено ${data.profiles.length} профилей из БД`);
+            
+            // Преобразуем формат API в формат демо-профилей
+            allProfiles = data.profiles.map(p => ({
+                id: p.id,
+                name: `${p.name}, ${p.age}`,
+                shortName: p.shortName || p.name,
+                age: p.age,
+                city: p.city + (p.dist ? ` · ${p.dist} км` : ''),
+                dist: p.dist || 0,
+                gender: p.gender,
+                desc: p.desc,
+                // ⚠️ Telegram photo_id нужно конвертировать в URL:
+                img: p.img.startsWith('AgAC') 
+                    ? `https://api.telegram.org/file/bot${BOT_TOKEN}/${p.img}` 
+                    : p.img,
+                tags: p.tags || [],
+                likedMe: false,
+                tgId: p.tgId || p.id,
+                tgUsername: p.tgUsername,
+                from_db: true  // Метка что профиль из БД
+            }));
+            useRealData = true;
+            return true;
+        }
+    } catch (e) {
+        console.log('⚠️ API недоступен, используем демо:', e);
+    }
+    return false;
+}
+
+// ═══ ОТПРАВКА ЛАЙКА В API ═══
+async function sendLikeToAPI(targetId) {
+    try {
+        await fetch(`${API_URL}/api/like`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                user_id: currentUserId,
+                target_id: targetId
+            })
+        });
+    } catch (e) {
+        console.log('⚠️ Не удалось отправить лайк в API');
+    }
+}
+
 // ═══ ИНИЦИАЛИЗАЦИЯ ═══
-window.onload = () => {
-  renderCards();
-  renderModQueue();
+window.onload = async () => {
+    // Пробуем загрузить из API, если не вышло — остаются демо
+    const loaded = await loadProfilesFromAPI();
+    
+    filteredProfiles = [...allProfiles];
+    renderCards();
+    renderModQueue();
+    updateStats();
+    
+    if (!loaded) {
+        showToast('🎭 Режим демо', '#f5c842');
+    }
 };
-
-function renderCards() {
-  if (filteredProfiles.length === 0) return;
-  const p = filteredProfiles[cardIndex % filteredProfiles.length];
-  const p2 = filteredProfiles[(cardIndex+1) % filteredProfiles.length];
-  updateCard1(p);
-  updateCard2(p2);
-}
-
-function updateCard1(p) {
-  document.getElementById('card1img').src = p.img;
-  document.getElementById('card1name').textContent = p.name;
-  document.getElementById('card1meta').textContent = '📍 ' + p.city;
-  document.getElementById('card1desc').textContent = p.desc;
-  document.getElementById('card1badges').innerHTML = p.tags.map(t=>`<span class="card-badge">${t}</span>`).join('');
-}
-
-function updateCard2(p) {
-  document.getElementById('card2img').src = p.img;
-  document.getElementById('card2name').textContent = p.name;
-  document.getElementById('card2meta').textContent = '📍 ' + p.city;
-}
 
 // ═══ НАВИГАЦИЯ ═══
 function showNav(name) {
@@ -547,31 +626,37 @@ function swipeCard(dir) {
   const p = filteredProfiles[cardIndex % filteredProfiles.length];
 
   if(dir==='right') {
-    card1.style.transform='translateX(150%) rotate(20deg)';
-    if(tg) tg.HapticFeedback?.impactOccurred('medium');
-    totalLikes++;
-    // Мэтч только если профиль лайкнул тебя И ты ещё не лайкал его
-    if(p.likedMe && !likedIds.has(p.id)) {
-      myMatches.push(p);
-      setTimeout(()=>showMatchPopup(p), 300);
-      addMatchCard(p);
+        card1.style.transform='translateX(150%) rotate(20deg)';
+        if(tg) tg.HapticFeedback?.impactOccurred('medium');
+        
+        // 🔥 ДОБАВИТЬ ЭТО: отправка лайка в БД
+        if (useRealData && p.from_db) {
+            sendLikeToAPI(p.id);  // ← отправляем лайк в PostgreSQL
+        }
+        
+        totalLikes++;
+        // Мэтч только если профиль лайкнул тебя И ты ещё не лайкал его
+        if(p.likedMe && !likedIds.has(p.id)) {
+            myMatches.push(p);
+            setTimeout(()=>showMatchPopup(p), 300);
+            addMatchCard(p);
+        }
+        likedIds.add(p.id);
+    } else {
+        card1.style.transform='translateX(-150%) rotate(-20deg)';
     }
-    likedIds.add(p.id);
-  } else {
-    card1.style.transform='translateX(-150%) rotate(-20deg)';
-  }
-
-  setTimeout(()=>{
-    cardIndex++;
-    const next = filteredProfiles[cardIndex % filteredProfiles.length];
-    const next2 = filteredProfiles[(cardIndex+1) % filteredProfiles.length];
-    card1.style.transition='';
-    card1.style.transform='';
-    currentX=0;
-    updateCard1(next);
-    updateCard2(next2);
-    updateStats();
-  }, 400);
+    
+    setTimeout(()=>{
+        cardIndex++;
+        const next = filteredProfiles[cardIndex % filteredProfiles.length];
+        const next2 = filteredProfiles[(cardIndex+1) % filteredProfiles.length];
+        card1.style.transition='';
+        card1.style.transform='';
+        currentX=0;
+        updateCard1(next);
+        updateCard2(next2);
+        updateStats();
+    }, 400);
 }
 
 function updateStats() {
