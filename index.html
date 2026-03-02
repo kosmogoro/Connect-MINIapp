@@ -302,7 +302,7 @@
       <div class="plan-desc">Напиши любому пользователю без мэтча</div>
       <div class="feature-item"><span class="feature-check">✓</span> Анонимное сообщение</div>
       <div class="feature-item"><span class="feature-check">✓</span> Без мэтча</div>
-      <div style="display:flex;align-items:baseline;gap:4px;margin-top:12px"><span class="plan-amount">10</span><span class="plan-unit">⭐ Stars</span></div>
+      <div style="display:flex;align-items:baseline;gap:4px;margin-top:12px"><span class="plan-amount">50</span><span class="plan-unit">⭐ Stars</span></div>
       <button class="buy-btn">Купить</button>
     </div>
     <div class="plan-card featured" onclick="buyPlan('sub')">
@@ -407,6 +407,10 @@
     <div style="background:rgba(245,200,66,0.1);border:1px solid rgba(245,200,66,0.3);border-radius:14px;padding:12px;font-size:13px;color:var(--gold)">
       ⚠️ После сохранения анкета уйдёт на повторную модерацию
     </div>
+    <button onclick="testConnection()" style="background:var(--bg3);border:1px solid var(--border);color:var(--muted);padding:10px;border-radius:12px;font-size:13px;cursor:pointer;width:100%;margin-top:8px">
+      🔧 Проверить соединение
+    </button>
+    <div id="diagResult" style="margin-top:8px;font-size:12px;color:var(--muted);word-break:break-all;display:none"></div>
     <div style="height:10px"></div>
   </div>
 </div>
@@ -1024,6 +1028,29 @@ function handlePhotoUpload(e) {
   reader.readAsDataURL(file);
 }
 
+async function testConnection() {
+  const diagEl = document.getElementById('diagResult');
+  diagEl.style.display = 'block';
+  diagEl.style.color = 'var(--muted)';
+  diagEl.textContent = '⏳ Проверяем ' + API_BASE + ' ...';
+
+  try {
+    const res = await fetch(`${API_BASE}/health`, {
+      signal: AbortSignal.timeout(8000)
+    });
+    const data = await res.json();
+    diagEl.style.color = '#2ecc71';
+    diagEl.textContent = '✅ Сервер отвечает: ' + JSON.stringify(data) +
+      ' | user_id: ' + currentUserId;
+  } catch (e) {
+    diagEl.style.color = '#ff3b6b';
+    diagEl.textContent = '❌ ' + e.name + ': ' + e.message +
+      ' | URL: ' + API_BASE +
+      ' | user_id: ' + currentUserId +
+      ' | tg: ' + (window.Telegram?.WebApp ? 'да' : 'нет');
+  }
+}
+
 async function saveProfile() {
   const name = document.getElementById('editName').value.trim();
   const age  = document.getElementById('editAge').value.trim();
@@ -1072,8 +1099,14 @@ async function saveProfile() {
     showToast('✅ Сохранено! Анкета на модерации', '#2ecc71');
 
   } catch (e) {
-    showToast('❌ Нет связи с сервером', '#ff3b6b');
-    console.error('saveProfile error:', e);
+    // Показываем конкретную причину ошибки
+    let msg = 'Нет связи с сервером';
+    if (e.name === 'AbortError')   msg = 'Сервер не ответил (таймаут)';
+    if (e.name === 'TypeError')    msg = 'Сервер недоступен — проверь Railway';
+    showToast('❌ ' + msg, '#ff3b6b');
+    console.error('saveProfile error:', e.name, e.message);
+    // Показываем URL куда стучимся — для отладки
+    console.log('API_BASE:', API_BASE, '| user_id:', currentUserId);
   } finally {
     if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Сохранить'; }
   }
@@ -1158,7 +1191,7 @@ function closePanelOutside(e, id) {
 // ══════════════════════════════════════════════════
 function buyPlan(type) {
   if (tg) tg.showAlert(type === 'message'
-    ? '⭐ Покупка 1 сообщения за 10 Stars'
+    ? '⭐ Покупка 1 сообщения за 50 Stars'
     : '⭐ Подписка на 30 дней за 500 Stars');
   else showToast('💎 Оплата через Telegram Stars', '#f5c842');
 }
