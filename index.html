@@ -737,6 +737,8 @@ function showNav(name) {
   document.getElementById('screen-' + name).classList.add('active');
   const nav = document.getElementById('nav-' + name);
   if (nav) nav.classList.add('active');
+  // Загружаем мэтчи из БД при каждом открытии вкладки
+  if (name === 'matches') loadMatchesFromAPI();
 }
 
 // ══════════════════════════════════════════════════
@@ -915,6 +917,48 @@ function resetFilters() {
 // ══════════════════════════════════════════════════
 //  МЭТЧИ
 // ══════════════════════════════════════════════════
+// ══════════════════════════════════════════════════
+//  ЗАГРУЗКА МЭТЧЕЙ ИЗ БД
+// ══════════════════════════════════════════════════
+async function loadMatchesFromAPI() {
+  if (!currentUserId) return;
+  try {
+    const res = await fetch(`${API_BASE}/api/matches?user_id=${currentUserId}`, {
+      signal: AbortSignal.timeout(5000)
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data.matches || data.matches.length === 0) return;
+
+    // Перестраиваем грид мэтчей — убираем старые карточки кроме кнопки "Найти ещё"
+    const grid = document.getElementById('matchesGrid');
+    // Оставляем только первый child (кнопка "Найти ещё")
+    while (grid.children.length > 1) grid.removeChild(grid.lastChild);
+
+    // Добавляем мэтчи из БД
+    data.matches.forEach(p => {
+      const card = document.createElement('div');
+      card.className = 'match-card';
+      card.onclick = () => openTelegramChat(p);
+      card.innerHTML = `
+        <img class="match-img" src="${p.photo_url || ''}" alt=""
+             onerror="this.style.background='var(--bg3)'">
+        <div class="match-info">
+          <div class="match-name">${p.name}</div>
+          <div class="match-city">📍 ${p.city || ''}</div>
+          <div style="margin-top:6px;color:var(--accent);font-size:11px;font-weight:600">💬 Написать</div>
+        </div>`;
+      grid.appendChild(card);
+    });
+
+    // Обновляем счётчик
+    document.getElementById('matchCount').textContent = data.matches.length;
+    console.log(`✅ Загружено ${data.matches.length} мэтчей из БД`);
+  } catch (e) {
+    console.warn('⚠️ Мэтчи не загружены:', e.message);
+  }
+}
+
 function addMatchCard(p) {
   const grid = document.getElementById('matchesGrid');
   const card = document.createElement('div');
@@ -980,26 +1024,59 @@ function handlePhotoUpload(e) {
   reader.readAsDataURL(file);
 }
 
-function saveProfile() {
+async function saveProfile() {
   const name = document.getElementById('editName').value.trim();
   const age  = document.getElementById('editAge').value.trim();
   const city = document.getElementById('editCity').value.trim();
   const desc = document.getElementById('editDesc').value.trim();
   if (!name || !age || !city) { showToast('⚠️ Заполни все поля', '#f5c842'); return; }
 
-  document.getElementById('myProfileImg').src  = myPhotoUrl;
-  document.getElementById('myName').textContent = name;
-  document.getElementById('mySub').textContent  = `${age} лет · ${city}`;
-  document.getElementById('pName').textContent  = name;
-  document.getElementById('pAge').textContent   = `${age} лет`;
-  document.getElementById('pCity').textContent  = city;
-  document.getElementById('pGender').textContent = selectedGender;
-  document.getElementById('pDesc').textContent  = desc;
-  document.getElementById('myStatus').textContent  = '⏳ На модерации';
-  document.getElementById('myStatus').className = 'profile-status status-pending';
+  // Блокируем кнопку чтобы не нажали дважды
+  const saveBtn = document.querySelector('#editPanel button[onclick="saveProfile()"]');
+  if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = '⏳ Сохранение...'; }
 
-  document.getElementById('editPanel').classList.remove('open');
-  showToast('✅ Анкета обновлена!', '#2ecc71');
+  try {
+    // ── Отправляем изменения в БД ──
+    const res = await fetch(`${API_BASE}/api/profile/update`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_id:     currentUserId,
+        name:        name,
+        age:         parseInt(age),
+        city:        city,
+        gender:      selectedGender,
+        description: desc
+      })
+    });
+
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      showToast('❌ ' + (data.error || 'Ошибка сервера'), '#ff3b6b');
+      return;
+    }
+
+    // ── Обновляем экран профиля ──
+    if (myPhotoUrl) document.getElementById('myProfileImg').src = myPhotoUrl;
+    document.getElementById('myName').textContent    = name;
+    document.getElementById('mySub').textContent     = `${age} лет · ${city}`;
+    document.getElementById('pName').textContent     = name;
+    document.getElementById('pAge').textContent      = `${age} лет`;
+    document.getElementById('pCity').textContent     = city;
+    document.getElementById('pGender').textContent   = selectedGender;
+    document.getElementById('pDesc').textContent     = desc;
+    document.getElementById('myStatus').textContent  = '⏳ На модерации';
+    document.getElementById('myStatus').className    = 'profile-status status-pending';
+
+    document.getElementById('editPanel').classList.remove('open');
+    showToast('✅ Сохранено! Анкета на модерации', '#2ecc71');
+
+  } catch (e) {
+    showToast('❌ Нет связи с сервером', '#ff3b6b');
+    console.error('saveProfile error:', e);
+  } finally {
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Сохранить'; }
+  }
 }
 
 // ══════════════════════════════════════════════════
@@ -1081,7 +1158,7 @@ function closePanelOutside(e, id) {
 // ══════════════════════════════════════════════════
 function buyPlan(type) {
   if (tg) tg.showAlert(type === 'message'
-    ? '⭐ Покупка 1 сообщения за 50 Stars'
+    ? '⭐ Покупка 1 сообщения за 10 Stars'
     : '⭐ Подписка на 30 дней за 500 Stars');
   else showToast('💎 Оплата через Telegram Stars', '#f5c842');
 }
